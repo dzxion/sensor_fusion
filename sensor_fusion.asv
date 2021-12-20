@@ -11,8 +11,6 @@ load('航线飞行验证纯惯导and数据集_data.mat');
 %% 初始化
 deltat_imu = 0.004;deltat_gps = 0.2;
 imu_sys_time = imu_sys_time * 1e-3;
-gps_sys_time = gps_sys_time * 0.001;
-
 gravity = [0 0 -1];P_acc = 0.005;GravityAcc = 980.665;
 
 gps_location_lat = gps_location_lat * 1e-7;
@@ -54,8 +52,12 @@ for t=1:length(imu_sys_time)
     if imu_count == 50
         while 1
             gps_count = gps_count + 1;
-            if gps_itow(gps_count) ~= gps_itow(gps_count-1) 
+            if gps_count > length(gps_sys_time)
+                gps_count = gps_count - 1;
                 break;
+            end
+            if gps_itow(gps_count) ~= gps_itow(gps_count-1) 
+                 break;
             end
         end
         vel_gps_prev = vel_gps;

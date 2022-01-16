@@ -4,20 +4,20 @@ clc;
 
 global ToRad ToDeg;
 ToDeg = 180/pi;ToRad = pi/180;
+GravityAcc = 980.665;
 
 %% 导入数据
 load('航线飞行验证纯惯导and数据集_data.mat');
 
 %% 初始化
-deltat_imu = 0.004;deltat_gps = 0.2;deltat_imu_gps = deltat_gps / deltat_imu;
-imu_sys_time = imu_sys_time * 1e-3;
-gps_sys_time = gps_sys_time * 1e-3;
+deltat_imu = 0.004;deltat_gps = 0.2;
 
 gravity = [0 0 -1];
-P_acc = 0.005;GravityAcc = 980.665;
+P_acc = 0.005;P_yaw = 1;
 pitch_acc_filter = zeros(length(imu_sys_time), 1);roll_acc_filter = zeros(length(imu_sys_time), 1);
 pitch_acc_compensate = zeros(length(imu_sys_time), 1);roll_acc_compensate = zeros(length(imu_sys_time), 1);
 acc_motion_gps = zeros(length(imu_sys_time), 3);
+history = 72;delay_acc = 72;delay_yaw_gps = 21;
 
 gps_location_lat = gps_location_lat * 1e-7;
 gps_location_lon = gps_location_lon * 1e-7;
@@ -25,6 +25,7 @@ gps_location_alt = gps_location_alt * 1e-1;
 gps_head = gps_head * 1e-2;
 [gps_x,gps_y,gps_z] = map_projection_project( gps_location_lat, gps_location_lon, gps_location_alt);
 
+Qwb_his = zeros(history, 4);
 Qwb_hat = zeros(length(imu_sys_time), 4);
 
 % 参考欧拉角
@@ -48,24 +49,37 @@ for t=1:length(imu_sys_time)
     roll_acc_filter(t) = atan2(-acc_filter_b(2), -acc_filter_b(3)) * ToDeg;
 end
 
-%% gps运动加速度补偿
-Qwb = [1 0 0 0];
-gps_count = 1;gps_update = false;imu_count = 0;
-vel_gps_last = [0,0,0];vel_gps = [0,0,0];
-acc_motion_w = [0,0,0];acc_motion_w_last = [0,0,0];delta_acc_w = [0,0,0];
-for t=1:length(imu_sys_time)
-    imu_count = imu_count + 1;
-    % gps首次更新
-    if imu_sys_time(t) == gps_sys_time(1) 
-        imu_count = 0;
-        gps_count = 1;
-        vel_gps = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];
-        pos_gps = [gps_x(1),gps_y(1),gps_z(1)];
-        head_gps = gps_head(1)*ToRad;
-        gps_update = true;
+%% gps速度首次更新时间计算
+gps_count = 1;
+while 1
+    gps_count = gps_count + 1;
+    if gps_vitow(gps_count) ~= gps_vitow(gps_count-1) 
+         break;
     end
-    % gps更新
-    if imu_count == deltat_imu_gps
+end
+gps_vel_first_update_time = gps_sys_time(gps_count);
+
+%% gps运动加速度延时补偿
+Qwb = [1 0 0 0];
+gps_update = false;imu_count = 0;
+vel_gps_last = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];vel_gps = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];
+acc_motion_w = [0,0,0];acc_motion_w_last = [0,0,0];delta_acc_w = [0,0,0];
+acceleration_available = false;gps_yaw_available = false;
+% 融合算法
+for k=1:length(imu_sys_time)
+    % 信息处理
+    imu_count = imu_count + 1;
+    if imu_sys_time(k) == gps_vel_first_update_time  
+        imu_count = 0;
+        vel_gps = [gps_vel_n(gps_count),gps_vel_e(gps_count),gps_vel_d(gps_count)];
+        pos_gps = [gps_x(gps_count),gps_y(gps_count),gps_z(gps_count)];
+        head_gps = gps_head(gps_count)*ToRad;
+        acc_motion_w = (vel_gps - vel_gps_last) / deltat_gps;
+        delta_acc_w = acc_motion_w - acc_motion_w_last;
+        gps_yaw_available = ture;
+%         gps_update = true;
+    end
+    if imu_count == 50
         while 1
             gps_count = gps_count + 1;
             if gps_vitow(gps_count) ~= gps_vitow(gps_count-1) 
@@ -76,53 +90,71 @@ for t=1:length(imu_sys_time)
         vel_gps = [gps_vel_n(gps_count),gps_vel_e(gps_count),gps_vel_d(gps_count)];
         pos_gps = [gps_x(gps_count),gps_y(gps_count),gps_z(gps_count)];
         head_gps = gps_head(gps_count)*ToRad;
-        imu_count = 0;
-        gps_update = true;
-    end
-    
-    % 陀螺积分预测姿态
-    Qwb = Qwb + 0.5 * quaternProd(Qwb, [0 gyro_x(t)*deltat_imu gyro_y(t)*deltat_imu gyro_z(t)*deltat_imu]); 
-    Qwb = Qwb / norm(Qwb);
-    % 加速度求误差角
-    acc_b_filter = [acc_filter_x(t) acc_filter_y(t) acc_filter_z(t)]';
-    Rwb = quatern2rotMat(Qwb);
-    acc_w_filter = Rwb * acc_b_filter;
-    acc_w_filter = acc_w_filter / norm(acc_w_filter);
-    % gps速度差分运动加速度
-    if gps_update
         acc_motion_w_last = acc_motion_w;
         acc_motion_w = (vel_gps - vel_gps_last) / deltat_gps;
         delta_acc_w = acc_motion_w - acc_motion_w_last;
+        imu_count = 0;
+        gps_yaw_available = ture;
+%         acceleration_available = true;
+%         gps_update = true;
     end
-    acc_motion_w_interp = acc_motion_w_last + (imu_count/deltat_imu_gps) * delta_acc_w;
-    acc_motion_gps(t,:) = acc_motion_w_interp;
-    acc_ref = acc_motion_w_interp + gravity * GravityAcc;
-    acc_ref = acc_ref / norm(acc_ref);
-    [angle,axis] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
-    % 求误差四元数
-    angle = P_acc * angle;
-    q_err = axisAngle2quatern(axis, angle);
-    q_err = q_err / norm(q_err);
-    % 修正姿态四元数
-    Qwb = quaternProd(q_err, Qwb);
-    Qwb = Qwb / norm(Qwb);
-    % gps修yaw
-    if gps_update
-         % 四元数分解
-         euler_pred = quatern2euler(Qwb);
-         yaw_pred = euler_pred(3);
-         q_yaw = axisAngle2quatern([0,0,1], yaw_pred);
-         q_yaw = quaternConj(q_yaw);
-         q_pr = quaternProd(q_yaw, Qwb);
-         % 使用gps航向
-         q_yaw_hat = axisAngle2quatern([0,0,1], head_gps);
-         Qwb = quaternProd(q_yaw_hat, q_pr);
-         gps_update = false;
+    acc_motion_w_interp = acc_motion_w_last + (imu_count/50) * delta_acc_w;
+    if k == delay_acc+1
+        acceleration_available = true;
     end
     
-    Qwb_hat(t,:) = Qwb;
+    % 信息融合
+    % 陀螺预测
+    Qwb = Qwb + 0.5 * quaternProd(Qwb, [0 gyro_x(k)*deltat_imu gyro_y(k)*deltat_imu gyro_z(k)*deltat_imu]); 
+    Qwb = Qwb / norm(Qwb);
+    
+    % 加速度修正
+    if acceleration_available
+        acc_b_filter = [acc_filter_x(k-delay_acc) acc_filter_y(k-delay_acc) acc_filter_z(k-delay_acc)]';
+        Rwb = quatern2rotMat(Qwb_his(1,4));
+        acc_w_filter = Rwb * acc_b_filter;
+        acc_ref = acc_motion_w_interp + gravity * GravityAcc;
+        acc_ref = acc_ref / norm(acc_ref);
+        [angle,axis] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
+        angle = P_acc * angle;
+        q_correction = axisAngle2quatern(axis, angle);
+        q_correction = q_correction / norm(q_correction);
+        for i=1:history
+            Qwb_his(i,4) = quaternProd(q_correction, Qwb_his(i,4));
+            Qwb_his(i,4) = Qwb_his(i,4) / norm(Qwb_his(i,4));
+        end
+        Qwb = quaternProd(q_correction, Qwb);
+        Qwb = Qwb / norm(Qwb);
+%         Qwb_his(history) = Qwb;
+    end
+    
+    % gps偏航修正
+    if gps_yaw_available
+        index = history-delay_yaw_gps+1;
+        euler_pred = quatern2euler(Qwb_his(index));
+        yaw_pred = euler_pred(3);
+        angle = P_yaw * (head_gps - yaw_pred);
+        axis = [0,0,1];
+        q_correction = axisAngle2quatern(axis, angle);
+        q_correction = q_correction / norm(q_correction);
+        for i=index:history
+            Qwb_his(i,4) = quaternProd(q_correction, Qwb_his(i,4));
+            Qwb_his(i,4) = Qwb_his(i,4) / norm(Qwb_his(i,4));
+        end
+        Qwb = quaternProd(q_correction, Qwb);
+        Qwb = Qwb / norm(Qwb);
+        gps_yaw_available = false;
+        %          gps_update = false;
+    end
+    
+    % 历史状态滚动
+    for i=1:history-1
+        Qwb_his(i,:) = Qwb_his(i+1,:);
+    end
+    Qwb_his(history,:) = Qwb;
+    Qwb_hat(k,:) = Qwb;
 end
-euler = quatern2euler(Qwb_hat) * ToDeg;
+euler = quatern2euler(Qwb_hat) * ToDeg; % 四元数转欧拉角
 
 %% 加速度算roll pitch（加入运动加速度补偿）
 for t=1:length(imu_sys_time)
@@ -144,32 +176,35 @@ for t=1:length(imu_sys_time)
     roll_acc_compensate(t) = atan2(-acc_compensate(2), -acc_compensate(3)) * ToDeg;
 end
 
+imu_sys_time = imu_sys_time * 1e-3;
+gps_sys_time = gps_sys_time * 1e-3;
+
 %% 姿态角对比
 figure
 subplot(311)
 plot(imu_sys_time, euler(:,1));
 grid on;hold on;
-plot(imu_sys_time, roll_acc_filter);
-grid on;hold on;
-plot(imu_sys_time, roll_acc_compensate);
-grid on;hold on;
+% plot(imu_sys_time, roll_acc_filter);
+% grid on;hold on;
+% plot(imu_sys_time, roll_acc_compensate);
+% grid on;hold on;
 plot(imu_sys_time, roll);
 xlabel('time (s)');
 ylabel('angle (deg)');
-legend('roll','roll acc','roll acc compensate','roll ref');
+legend('roll','roll ref');
 title('Roll');
 
 subplot(312)
 plot(imu_sys_time, euler(:,2));
 grid on;hold on;
-plot(imu_sys_time, pitch_acc_filter);
-grid on;hold on;
-plot(imu_sys_time, pitch_acc_compensate);
-grid on;hold on;
+% plot(imu_sys_time, pitch_acc_filter);
+% grid on;hold on;
+% plot(imu_sys_time, pitch_acc_compensate);
+% grid on;hold on;
 plot(imu_sys_time, Pitch);
 xlabel('time (s)');
 ylabel('angle (deg)');
-legend('pitch','pitch acc','pitch acc compensate','pitch ref');
+legend('pitch','pitch ref');
 title('Pitch');
 
 subplot(313)

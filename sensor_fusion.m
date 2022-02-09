@@ -13,7 +13,7 @@ load('航线飞行验证纯惯导and数据集_data.mat');
 deltat_imu = 0.004;deltat_gps = 0.2;
 
 gravity = [0 0 -1];
-P_acc = 0.005;P_yaw = 1;
+P_acc = 0.005;P_yaw = 0.1;
 pitch_acc_filter = zeros(length(imu_sys_time), 1);roll_acc_filter = zeros(length(imu_sys_time), 1);
 pitch_acc_compensate = zeros(length(imu_sys_time), 1);roll_acc_compensate = zeros(length(imu_sys_time), 1);
 acc_motion_gps = zeros(length(imu_sys_time), 3);
@@ -65,6 +65,7 @@ gps_update = false;imu_count = 0;
 vel_gps_last = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];vel_gps = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];
 acc_motion_w = [0,0,0];acc_motion_w_last = [0,0,0];delta_acc_w = [0,0,0];
 acceleration_available = false;gps_yaw_available = false;
+error_rp = [];error_yaw = [];
 % 融合算法
 for k=1:length(imu_sys_time)
     % 信息处理
@@ -116,9 +117,10 @@ for k=1:length(imu_sys_time)
         acc_w_filter = Rwb * acc_b_filter;
         acc_ref = acc_motion_w_interp + gravity * GravityAcc;
         acc_ref = acc_ref / norm(acc_ref);
-        [angle,axis] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
-        angle = P_acc * angle;
-        q_correction = axisAngle2quatern(axis, angle);
+        [angle_error,axis] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
+        error_rp = [error_rp,angle_error*ToDeg];
+        angle_error = P_acc * angle_error;
+        q_correction = axisAngle2quatern(axis, angle_error);
         q_correction = q_correction / norm(q_correction);
         for i=1:history
             Qwb_his(i,:) = quaternProd(q_correction, Qwb_his(i,:));
@@ -134,9 +136,18 @@ for k=1:length(imu_sys_time)
         index = history-delay_yaw_gps+1;
         euler_pred = quatern2euler(Qwb_his(index,:));
         yaw_pred = euler_pred(3);
-        angle = P_yaw * (head_gps - yaw_pred);
+        % 角度误差化为-180~180
+        angle_error = head_gps - yaw_pred;
+        while angle_error < -pi
+            angle_error = angle_error + 2*pi;
+        end
+        while angle_error > pi
+            angle_error = angle_error - 2*pi;
+        end
+        error_yaw = [error_yaw,angle_error*ToDeg];
+        angle_error = P_yaw * angle_error;
         axis = [0,0,1];
-        q_correction = axisAngle2quatern(axis, angle);
+        q_correction = axisAngle2quatern(axis, angle_error);
         q_correction = q_correction / norm(q_correction);
         for i=index:history
             Qwb_his(i,:) = quaternProd(q_correction, Qwb_his(i,:));

@@ -1,4 +1,4 @@
-function [x,y,z] = map_projection_project( lat, lon, alt )
+function pos = map_projection_project( lat, lon, alt )
 %   lat : deg
 %   lon : deg
 %   alt : cm
@@ -17,4 +17,5 @@ y = lon_rad_distance.*(rEarth * cos(lat));
 y = y';
 z = alt - alt(1);
 z = -z';
+pos = [x,y,z];
 end

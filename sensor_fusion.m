@@ -65,7 +65,8 @@ Qwb = [1 0 0 0];vel_w = [0 0 0];pos_w = [0 0 0];height = 0;
 gps_update = false;imu_count = 0;
 vel_gps_last = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];vel_gps = [gps_vel_n(1),gps_vel_e(1),gps_vel_d(1)];
 acc_motion_w = [0,0,0];acc_motion_w_last = [0,0,0];delta_acc_w = [0,0,0];
-acceleration_available = false;gps_yaw_available = false;acc_motion_w_gps = [];acc_motion_w_all = [];gps_update_time = [];
+acceleration_available = false;gps_yaw_available = false;
+acc_motion_w_gps = [];acc_motion_w_all = [];gps_update_time = [];vel_gps_all = [];pos_gps_all = [];
 error_rp = [];error_yaw = [];
 % 融合算法
 for k=1:length(imu_sys_time)
@@ -75,7 +76,9 @@ for k=1:length(imu_sys_time)
     if imu_sys_time(k) == gps_vel_first_update_time  
         imu_count = 0;
         vel_gps = [gps_vel_n(gps_count),gps_vel_e(gps_count),gps_vel_d(gps_count)];
+        vel_gps_all = [vel_gps_all;vel_gps];
         pos_gps = gps_pos(gps_count,:);
+        pos_gps_all = [pos_gps_all;pos_gps];
         head_gps = gps_head(gps_count)*ToRad;
         acc_motion_w = (vel_gps - vel_gps_last) / deltat_gps;
         acc_motion_w_gps = [acc_motion_w_gps;acc_motion_w];
@@ -93,7 +96,9 @@ for k=1:length(imu_sys_time)
         end
         vel_gps_last = vel_gps;
         vel_gps = [gps_vel_n(gps_count),gps_vel_e(gps_count),gps_vel_d(gps_count)];
+        vel_gps_all = [vel_gps_all;vel_gps];
         pos_gps = gps_pos(gps_count,:);
+        pos_gps_all = [pos_gps_all;pos_gps];
         head_gps = gps_head(gps_count)*ToRad;
         acc_motion_w_last = acc_motion_w;
         acc_motion_w = (vel_gps - vel_gps_last) / deltat_gps;
@@ -124,10 +129,10 @@ for k=1:length(imu_sys_time)
         acc_w_filter = acc_w_filter / norm(acc_w_filter);
         acc_ref = acc_motion_w_interp + gravity * GravityAcc;
         acc_ref = acc_ref / norm(acc_ref);
-        [angle_error,axis] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
+        [angle_error,axis_error] = get_included_angle_from_unit_vector(acc_w_filter.', acc_ref);
         error_rp = [error_rp,angle_error*ToDeg];
         angle_error = P_acc * angle_error;
-        q_correction = axisAngle2quatern(axis, angle_error);
+        q_correction = axisAngle2quatern(axis_error, angle_error);
         q_correction = q_correction / norm(q_correction);
         for i=1:history
             Qwb_his(i,:) = quaternProd(q_correction, Qwb_his(i,:));
@@ -153,8 +158,8 @@ for k=1:length(imu_sys_time)
         end
         error_yaw = [error_yaw,angle_error*ToDeg];
         angle_error = P_yaw * angle_error;
-        axis = [0,0,1];
-        q_correction = axisAngle2quatern(axis, angle_error);
+        axis_error = [0,0,1];
+        q_correction = axisAngle2quatern(axis_error, angle_error);
         q_correction = q_correction / norm(q_correction);
         for i=index:history
             Qwb_his(i,:) = quaternProd(q_correction, Qwb_his(i,:));
@@ -235,13 +240,18 @@ imu_sys_time = imu_sys_time * 1e-3;
 gps_sys_time = gps_sys_time * 1e-3;
 gps_update_time = gps_update_time * 1e-3;
 
-%% 评估姿态效果（基于运动加速度误差）
-err_acc_all = [];
+%% 评估估计器的效果
+err_a_all = [];err_v_all = [];err_p_all = [];
 gps_count = 1;
 for k=1:length(imu_sys_time)
     if imu_sys_time(k) == gps_update_time(gps_count)
-        err = acc_motion_w_gps(gps_count,:)-acc_motion_w_all(k,:);
-        err_acc_all = [err_acc_all;err];
+        err_a = acc_motion_w_gps(gps_count,:)-acc_motion_w_all(k,:);
+        err_v = vel_gps_all(gps_count,:)-vel_hat(k,:);
+        err_p = pos_gps_all(gps_count,:)-pos_hat(k,:);
+        
+        err_a_all = [err_a_all;err_a];
+        err_v_all = [err_v_all;err_v];
+        err_p_all = [err_p_all;err_p];
         gps_count = gps_count + 1;
     end
     
@@ -249,10 +259,24 @@ for k=1:length(imu_sys_time)
         break;
     end
 end
-std_n = std(err_acc_all(:,1));
-std_e = std(err_acc_all(:,2));
-fprintf('std acc n : %f\n', std_n);
-fprintf('std acc e : %f\n', std_e);
+std_a_n = std(err_a_all(:,1));
+std_a_e = std(err_a_all(:,2));
+std_a_d = std(err_a_all(:,3));
+std_v_n = std(err_v_all(:,1));
+std_v_e = std(err_v_all(:,2));
+std_v_d = std(err_v_all(:,3));
+std_p_n = std(err_p_all(:,1));
+std_p_e = std(err_p_all(:,2));
+std_p_d = std(err_p_all(:,3));
+fprintf('std a n : %f\n', std_a_n);
+fprintf('std a e : %f\n', std_a_e);
+fprintf('std a d : %f\n', std_a_d);
+fprintf('std v n : %f\n', std_v_n);
+fprintf('std v e : %f\n', std_v_e);
+fprintf('std v d : %f\n', std_v_d);
+fprintf('std p n : %f\n', std_p_n);
+fprintf('std p e : %f\n', std_p_e);
+fprintf('std p d : %f\n', std_p_d);
 
 %% 实验结果
 
@@ -353,7 +377,7 @@ title('pos z');
 
 % 运动加速度对比
 figure
-subplot(211)
+subplot(311)
 plot(imu_sys_time, acc_motion_w_all(:,1));
 grid on;hold on;
 plot(gps_update_time, acc_motion_w_gps(:,1));
@@ -362,7 +386,7 @@ ylabel('accelration (cm/s^2)');
 legend('acc n','acc n gps');
 title('acc n');
 
-subplot(212)
+subplot(312)
 plot(imu_sys_time, acc_motion_w_all(:,2));
 grid on;hold on;
 plot(gps_update_time, acc_motion_w_gps(:,2));
@@ -371,21 +395,56 @@ ylabel('accelration (cm/s^2)');
 legend('acc e','acc e gps');
 title('acc e');
 
-% subplot(313)
-% plot(imu_sys_time, acc_motion_w_all(:,3));
-% grid on;hold on;
-% plot(gps_update_time, acc_motion_w_gps(:,3));
-% xlabel('time (s)');
-% ylabel('accelration (cm/s^2)');
-% legend('acc d','acc d gps');
-% title('acc d');
-
-% 加速度误差
-figure
-plot(gps_update_time, err_acc_all(:,1));
+subplot(313)
+plot(imu_sys_time, acc_motion_w_all(:,3));
 grid on;hold on;
-plot(gps_update_time, err_acc_all(:,2));
+plot(gps_update_time, acc_motion_w_gps(:,3));
+xlabel('time (s)');
+ylabel('accelration (cm/s^2)');
+legend('acc d','acc d gps');
+title('acc d');
+
+% 误差
+figure
+subplot(311)
+plot(gps_update_time, err_a_all(:,1));
+grid on;hold on;
+plot(gps_update_time, err_a_all(:,2));
+grid on;hold on;
+plot(gps_update_time, err_a_all(:,3));
 xlabel('time (s)');
 ylabel('err (cm/s^2)');
-legend('err n','err e');
+legend('err a n','err a e','err a d');
 title('err acc');
+
+subplot(312)
+plot(gps_update_time, err_v_all(:,1));
+grid on;hold on;
+plot(gps_update_time, err_v_all(:,2));
+grid on;hold on;
+plot(gps_update_time, err_v_all(:,3));
+xlabel('time (s)');
+ylabel('err (cm/s)');
+legend('err v n','err v e','err v d');
+title('err vel');
+
+subplot(313)
+plot(gps_update_time, err_p_all(:,1));
+grid on;hold on;
+plot(gps_update_time, err_p_all(:,2));
+grid on;hold on;
+plot(gps_update_time, err_p_all(:,3));
+xlabel('time (s)');
+ylabel('err (cm)');
+legend('err p n','err p e','err p d');
+title('err pos');
+
+% 运动轨迹
+figure
+plot3(pos_hat(:,1),pos_hat(:,2),-pos_hat(:,3));
+grid on;hold on;
+plot3(gps_pos(:,1),gps_pos(:,2),-gps_pos(:,3));
+axis equal;
+xlabel('X (cm)');
+ylabel('Y (cm)');    
+zlabel('Z (cm)');
